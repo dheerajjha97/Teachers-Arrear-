@@ -1,0 +1,6 @@
+{
+  "name": "Salary Arrear Format Generator",
+  "description": "An interactive tool to feed salary data, compute monthly arrear differentials (Due vs Drawn), and print or download a professional PDF matching the DPO Establishment Muzaffarpur format.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

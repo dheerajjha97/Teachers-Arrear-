@@ -1,0 +1,66 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: var(--font-sans), system-ui, sans-serif;
+  --font-mono: var(--font-mono), monospace;
+}
+
+/* Custom Print styles */
+@media print {
+  /* Hide interface elements */
+  .no-print {
+    display: none !important;
+  }
+
+  /* Force landscape orientation for A4 paper */
+  @page {
+    size: A4 landscape;
+    margin: 8mm;
+  }
+
+  /* Styling for perfect print */
+  body {
+    background: #ffffff !important;
+    color: #000000 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  .print-container {
+    box-shadow: none !important;
+    border: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    background: #ffffff !important;
+    width: 100% !important;
+  }
+
+  /* Crisp thin borders for table */
+  table {
+    border-collapse: collapse !important;
+    width: 100% !important;
+    table-layout: fixed !important;
+  }
+
+  th, td {
+    border: 1px solid #000000 !important;
+    font-size: 7.5px !important;
+    line-height: 1.1 !important;
+    padding: 2px 1px !important;
+    word-break: break-all !important;
+    white-space: normal !important;
+  }
+
+  /* Avoid page breaks inside rows */
+  tr {
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+  }
+
+  /* Ensure text colors are fully dark on paper */
+  .text-print-black {
+    color: #000000 !important;
+  }
+}
