@@ -46,9 +46,7 @@
 
   th, td {
     border: 1px solid #000000 !important;
-    font-size: 7.5px !important;
     line-height: 1.1 !important;
-    padding: 2px 1px !important;
     word-break: break-all !important;
     white-space: normal !important;
   }

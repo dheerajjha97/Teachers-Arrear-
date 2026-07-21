@@ -1285,7 +1285,7 @@ export default function SalaryArrearPortal() {
         }
         
         const imgData = await toPng(element, {
-          pixelRatio: 2.2, // Balance clean resolution and size
+          pixelRatio: 3.5, // Balance clean resolution and size
           backgroundColor: '#ffffff',
           cacheBust: true,
         });
@@ -3264,7 +3264,6 @@ export default function SalaryArrearPortal() {
                       key={group.key}
                       id={`arrear-sheet-preview-page-${pageIdx}`}
                       className={`print-page bg-white text-black ${pagePadding} shadow-md rounded-lg min-w-[1000px] mx-auto select-text font-serif leading-tight text-[11px] relative`}
-                      style={{ contentVisibility: 'auto' }}
                     >
                       {/* Header Box */}
                       <div className={`text-center ${headerMargin} relative`}>
