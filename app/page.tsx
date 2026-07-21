@@ -472,6 +472,7 @@ export default function SalaryArrearPortal() {
   const [pdfPageSplitMode, setPdfPageSplitMode] = useState<'six-months' | 'yearly' | 'single-page'>('six-months');
   const [showConfig, setShowConfig] = useState<boolean>(false);
   const [isMounted, setIsMounted] = useState<boolean>(false);
+  const [activeFormat, setActiveFormat] = useState<'salary' | 'da'>('salary');
 
   // Modal states for safe confirmations inside iframes
   const [showResetModal, setShowResetModal] = useState<boolean>(false);
@@ -495,6 +496,7 @@ export default function SalaryArrearPortal() {
     const cachedGis = localStorage.getItem('arrear_gis');
     const cachedNps = localStorage.getItem('arrear_nps');
     const cachedUseAutoDa = localStorage.getItem('arrear_use_auto_da');
+    const cachedActiveFormat = localStorage.getItem('arrear_active_format') || 'salary';
 
     // Fitment state cache
     const cachedTeacherCategory = localStorage.getItem('arrear_teacher_category') || 'I-V';
@@ -543,6 +545,7 @@ export default function SalaryArrearPortal() {
       setGisAllowance(currentGis);
       setIsNpsApplicable(currentNps);
       setUseAutoDa(currentUseAutoDa);
+      setActiveFormat(cachedActiveFormat as 'salary' | 'da');
 
       setTeacherCategory(cachedTeacherCategory);
       setInitialDueIndex(Number(cachedInitialDueIndex));
@@ -604,6 +607,7 @@ export default function SalaryArrearPortal() {
         localStorage.setItem('arrear_gis', gisAllowance.toString());
         localStorage.setItem('arrear_nps', isNpsApplicable.toString());
         localStorage.setItem('arrear_use_auto_da', useAutoDa.toString());
+        localStorage.setItem('arrear_active_format', activeFormat);
 
         const now = new Date();
         const timeString = now.toLocaleTimeString('hi-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
@@ -636,6 +640,7 @@ export default function SalaryArrearPortal() {
     gisAllowance,
     isNpsApplicable,
     useAutoDa,
+    activeFormat,
     isMounted
   ]);
 
@@ -1163,7 +1168,19 @@ export default function SalaryArrearPortal() {
     return rows.reduce((sum, row) => sum + row[section][field], 0);
   };
 
-  const grandTotalDiffNet = getGrandTotal('diff', 'net');
+  const getRowsNet = (rowsList: typeof rows) => {
+    return rowsList.reduce((sum, r) => {
+      if (activeFormat === 'salary') {
+        return sum + r.diff.net;
+      } else {
+        const dueNet = (r.due.basic + r.due.da) - r.due.nps;
+        const drawnNet = (r.drawn.basic + r.drawn.da) - r.drawn.nps;
+        return sum + (dueNet - drawnNet);
+      }
+    }, 0);
+  };
+
+  const grandTotalDiffNet = getRowsNet(rows);
 
   // Group rows by period (Jan-Jun vs Jul-Dec of each year) for multi-page PDF/print output
   const getPageGroups = () => {
@@ -1215,6 +1232,26 @@ export default function SalaryArrearPortal() {
     return groupRows.reduce((sum, row) => sum + row[section][field], 0);
   };
 
+  const getPageNetDiff = (groupRows: typeof rows) => {
+    if (activeFormat === 'salary') {
+      return getPageTotal(groupRows, 'diff', 'net');
+    } else {
+      const pageDueBasicTotal = getPageTotal(groupRows, 'due', 'basic');
+      const pageDueDaTotal = getPageTotal(groupRows, 'due', 'da');
+      const pageDueGrossTotal = pageDueBasicTotal + pageDueDaTotal;
+      const pageDueNpsTotal = getPageTotal(groupRows, 'due', 'nps');
+      const pageDueNetTotal = pageDueGrossTotal - pageDueNpsTotal;
+
+      const pageDrawnBasicTotal = getPageTotal(groupRows, 'drawn', 'basic');
+      const pageDrawnDaTotal = getPageTotal(groupRows, 'drawn', 'da');
+      const pageDrawnGrossTotal = pageDrawnBasicTotal + pageDrawnDaTotal;
+      const pageDrawnNpsTotal = getPageTotal(groupRows, 'drawn', 'nps');
+      const pageDrawnNetTotal = pageDrawnGrossTotal - pageDrawnNpsTotal;
+
+      return pageDueNetTotal - pageDrawnNetTotal;
+    }
+  };
+
   // Print function
   const handlePrint = () => {
     window.print();
@@ -1256,7 +1293,8 @@ export default function SalaryArrearPortal() {
         pdf.addImage(imgData, 'PNG', 0, 0, imgWidth, pageHeight);
       }
       
-      const filename = `Salary_Arrear_DPO_${(teacherInfo.teacherName || 'Report').replace(/\s+/g, '_')}.pdf`;
+      const prefix = activeFormat === 'salary' ? 'Salary_Arrear_DPO' : 'DA_Arrear_DPO';
+      const filename = `${prefix}_${(teacherInfo.teacherName || 'Report').replace(/\s+/g, '_')}.pdf`;
       pdf.save(filename);
     } catch (error) {
       console.error('Error generating PDF:', error);
@@ -1563,10 +1601,314 @@ export default function SalaryArrearPortal() {
           worksheet.getColumn(col).width = 12.5;
         }
       };
-      
+
+      const buildSheetDA = (worksheet: any, sheetRows: typeof rows, titleLabel: string) => {
+        // Enable grid lines
+        worksheet.views = [{ showGridLines: true }];
+        
+        // 1. Title Block
+        worksheet.mergeCells('A1:Q1');
+        worksheet.getCell('A1').value = 'OFFICE, DPO ESTABLISHMENT MUZAFFARPUR';
+        worksheet.getCell('A1').font = { name: 'Arial', size: 14, bold: true, color: { argb: 'FF1E293B' } };
+        worksheet.getCell('A1').alignment = { horizontal: 'center', vertical: 'middle' };
+        
+        worksheet.mergeCells('A2:Q2');
+        worksheet.getCell('A2').value = `D.A. ARREAR FORMAT (${titleLabel})`;
+        worksheet.getCell('A2').font = { name: 'Arial', size: 12, bold: true, color: { argb: 'FF475569' } };
+        worksheet.getCell('A2').alignment = { horizontal: 'center', vertical: 'middle' };
+        
+        // 2. Personal Details
+        worksheet.getCell('A4').value = 'NAME OF SCHOOL:';
+        worksheet.getCell('A4').font = { bold: true, name: 'Arial', size: 9 };
+        worksheet.mergeCells('B4:F4');
+        worksheet.getCell('B4').value = teacherInfo.schoolName || '—';
+        worksheet.getCell('B4').font = { name: 'Arial', size: 9 };
+        
+        worksheet.getCell('H4').value = 'BLOCK NAME:';
+        worksheet.getCell('H4').font = { bold: true, name: 'Arial', size: 9 };
+        worksheet.mergeCells('I4:L4');
+        worksheet.getCell('I4').value = teacherInfo.blockName || '—';
+        worksheet.getCell('I4').font = { name: 'Arial', size: 9 };
+        
+        worksheet.getCell('N4').value = 'DATE OF JOINING:';
+        worksheet.getCell('N4').font = { bold: true, name: 'Arial', size: 9 };
+        worksheet.mergeCells('O4:Q4');
+        worksheet.getCell('O4').value = teacherInfo.dateOfJoining || '—';
+        worksheet.getCell('O4').font = { name: 'Arial', size: 9 };
+        
+        // Row 5
+        worksheet.getCell('A5').value = 'NAME OF TEACHER:';
+        worksheet.getCell('A5').font = { bold: true, name: 'Arial', size: 9 };
+        worksheet.mergeCells('B5:F5');
+        worksheet.getCell('B5').value = teacherInfo.teacherName || '—';
+        worksheet.getCell('B5').font = { name: 'Arial', size: 9, bold: true, color: { argb: 'FF1E3A8A' } };
+        
+        worksheet.getCell('H5').value = 'DESIGNATION:';
+        worksheet.getCell('H5').font = { bold: true, name: 'Arial', size: 9 };
+        worksheet.mergeCells('I5:L5');
+        worksheet.getCell('I5').value = teacherInfo.designation || '—';
+        worksheet.getCell('I5').font = { name: 'Arial', size: 9 };
+        
+        worksheet.getCell('N5').value = 'IFSC:';
+        worksheet.getCell('N5').font = { bold: true, name: 'Arial', size: 9 };
+        worksheet.mergeCells('O5:Q5');
+        worksheet.getCell('O5').value = teacherInfo.ifsc || '—';
+        worksheet.getCell('O5').font = { name: 'Arial', size: 9 };
+        
+        // Row 6
+        worksheet.getCell('A6').value = 'PRAN NO.:';
+        worksheet.getCell('A6').font = { bold: true, name: 'Arial', size: 9 };
+        worksheet.mergeCells('B6:F6');
+        worksheet.getCell('B6').value = teacherInfo.pran || '—';
+        worksheet.getCell('B6').font = { name: 'Arial', size: 9 };
+        
+        worksheet.getCell('H6').value = 'ACCOUNT NO.:';
+        worksheet.getCell('H6').font = { bold: true, name: 'Arial', size: 9 };
+        worksheet.mergeCells('I6:L6');
+        worksheet.getCell('I6').value = teacherInfo.accountNo || '—';
+        worksheet.getCell('I6').font = { name: 'Arial', size: 9 };
+        
+        // Style all meta fields with a subtle background and borders
+        const metaRows = [4, 5, 6];
+        metaRows.forEach(r => {
+          worksheet.getRow(r).height = 20;
+          for (let col = 1; col <= 17; col++) {
+            const cell = worksheet.getCell(r, col);
+            cell.alignment = { vertical: 'middle' };
+          }
+        });
+        
+        // 3. Table Headers (Row 8 & Row 9)
+        worksheet.mergeCells('A8:A9');
+        worksheet.getCell('A8').value = 'MONTH';
+        worksheet.mergeCells('B8:B9');
+        worksheet.getCell('B8').value = 'No of Days';
+        
+        worksheet.mergeCells('C8:G8');
+        worksheet.getCell('C8').value = 'ADMISSIBLE';
+        worksheet.mergeCells('H8:L8');
+        worksheet.getCell('H8').value = 'DRAWN';
+        worksheet.mergeCells('M8:Q8');
+        worksheet.getCell('M8').value = 'DIFFERENCE';
+        
+        const subHeaders = [
+          'Basic Pay', 'D.A.', 'GROSS AMOUNT', 'NPS', 'NET AMOUNT', // ADMISSIBLE
+          'Basic Pay', 'D.A.', 'GROSS AMOUNT', 'NPS', 'NET AMOUNT', // DRAWN
+          'Basic Pay', 'D.A.', 'GROSS AMOUNT', 'NPS', 'NET AMOUNT'  // DIFFERENCE
+        ];
+        subHeaders.forEach((sh, idx) => {
+          worksheet.getCell(9, idx + 3).value = sh;
+        });
+        
+        // Row Heights
+        worksheet.getRow(8).height = 24;
+        worksheet.getRow(9).height = 22;
+        
+        // Color Styles
+        const applyHeaderStyle = (cell: any, bgColor: string) => {
+          cell.font = { name: 'Arial', size: 9, bold: true, color: { argb: 'FFFFFFFF' } };
+          cell.fill = {
+            type: 'pattern',
+            pattern: 'solid',
+            fgColor: { argb: 'FF' + bgColor }
+          };
+          cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+          cell.border = {
+            top: { style: 'thin', color: { argb: 'FF000000' } },
+            bottom: { style: 'thin', color: { argb: 'FF000000' } },
+            left: { style: 'thin', color: { argb: 'FF000000' } },
+            right: { style: 'thin', color: { argb: 'FF000000' } }
+          };
+        };
+        
+        // Apply main headers
+        applyHeaderStyle(worksheet.getCell('A8'), '475569');
+        applyHeaderStyle(worksheet.getCell('B8'), '475569');
+        applyHeaderStyle(worksheet.getCell('C8'), '059669');
+        applyHeaderStyle(worksheet.getCell('H8'), '4F46E5');
+        applyHeaderStyle(worksheet.getCell('M8'), 'D97706');
+        
+        // Apply subheaders
+        for (let c = 3; c <= 7; c++) applyHeaderStyle(worksheet.getCell(9, c), '10B981'); // Emerald tint
+        for (let c = 8; c <= 12; c++) applyHeaderStyle(worksheet.getCell(9, c), '6366F1'); // Indigo tint
+        for (let c = 13; c <= 17; c++) applyHeaderStyle(worksheet.getCell(9, c), 'F59E0B'); // Amber tint
+        
+        // 4. Data Rows
+        let currentIdx = 10;
+        sheetRows.forEach(row => {
+          const admGross = row.due.basic + row.due.da;
+          const admNet = admGross - row.due.nps;
+          
+          const drwGross = row.drawn.basic + row.drawn.da;
+          const drwNet = drwGross - row.drawn.nps;
+          
+          const diffBasic = row.due.basic - row.drawn.basic;
+          const diffDa = row.due.da - row.drawn.da;
+          const diffGross = admGross - drwGross;
+          const diffNps = row.due.nps - row.drawn.nps;
+          const diffNet = admNet - drwNet;
+
+          const vals = [
+            row.month,
+            row.days,
+            
+            row.due.basic,
+            row.due.da,
+            admGross,
+            row.due.nps,
+            admNet,
+            
+            row.drawn.basic,
+            row.drawn.da,
+            drwGross,
+            row.drawn.nps,
+            drwNet,
+            
+            diffBasic,
+            diffDa,
+            diffGross,
+            diffNps,
+            diffNet
+          ];
+          
+          worksheet.addRow(vals);
+          const rObj = worksheet.getRow(currentIdx);
+          rObj.height = 20;
+          
+          rObj.getCell(1).alignment = { horizontal: 'center', vertical: 'middle' };
+          rObj.getCell(2).alignment = { horizontal: 'center', vertical: 'middle' };
+          rObj.getCell(1).font = { name: 'Arial', size: 9, bold: true };
+          rObj.getCell(2).font = { name: 'Arial', size: 9 };
+          
+          for (let col = 3; col <= 17; col++) {
+            const cell = rObj.getCell(col);
+            cell.numFormat = '#,##0';
+            cell.alignment = { horizontal: 'right', vertical: 'middle' };
+            cell.font = { name: 'Arial', size: 9 };
+            
+            // Background color and borders
+            if (col <= 7) {
+              cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF0FDF4' } }; // Soft light green
+            } else if (col <= 12) {
+              cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF5F3FF' } }; // Soft light purple
+            } else {
+              cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFDF6E2' } }; // Soft light amber
+              if (col === 17) {
+                cell.font = { name: 'Arial', size: 9, bold: true };
+              }
+            }
+            
+            cell.border = {
+              top: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+              bottom: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+              left: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+              right: { style: 'thin', color: { argb: 'FFE2E8F0' } }
+            };
+          }
+          currentIdx++;
+        });
+        
+        // 5. Total Row
+        const totalIdx = currentIdx;
+        worksheet.addRow([]);
+        const totalRowObj = worksheet.getRow(totalIdx);
+        totalRowObj.height = 22;
+        
+        worksheet.mergeCells(`A${totalIdx}:B${totalIdx}`);
+        worksheet.getCell(`A${totalIdx}`).value = 'GRAND TOTAL';
+        worksheet.getCell(`A${totalIdx}`).alignment = { horizontal: 'center', vertical: 'middle' };
+        worksheet.getCell(`A${totalIdx}`).font = { name: 'Arial', size: 9, bold: true };
+        
+        for (let col = 3; col <= 17; col++) {
+          const cell = totalRowObj.getCell(col);
+          const colLetter = String.fromCharCode(64 + col);
+          cell.value = { formula: `=SUM(${colLetter}10:${colLetter}${totalIdx - 1})` };
+          cell.numFormat = '#,##0';
+          cell.font = { name: 'Arial', size: 9, bold: true };
+          cell.alignment = { horizontal: 'right', vertical: 'middle' };
+          
+          if (col <= 7) {
+            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFDCFCE7' } }; // Light green
+          } else if (col <= 12) {
+            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE0E7FF' } }; // Light indigo
+          } else {
+            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FEF3C7' } }; // Light amber
+          }
+          
+          cell.border = {
+            top: { style: 'thin', color: { argb: 'FF000000' } },
+            bottom: { style: 'double', color: { argb: 'FF000000' } },
+            left: { style: 'thin', color: { argb: 'FFE2E8F0' } },
+            right: { style: 'thin', color: { argb: 'FFE2E8F0' } }
+          };
+        }
+        
+        // 6. Words Row
+        const wordsIdx = totalIdx + 1;
+        worksheet.addRow([]);
+        const wordsRowObj = worksheet.getRow(wordsIdx);
+        wordsRowObj.height = 24;
+        
+        worksheet.mergeCells(`A${wordsIdx}:Q${wordsIdx}`);
+        const totalNetDiffVal = sheetRows.reduce((sum, r) => {
+          const admGross = r.due.basic + r.due.da;
+          const admNet = admGross - r.due.nps;
+          const drwGross = r.drawn.basic + r.drawn.da;
+          const drwNet = drwGross - r.drawn.nps;
+          return sum + (admNet - drwNet);
+        }, 0);
+        const words = convertNumberToWords(totalNetDiffVal);
+        
+        const wordCell = worksheet.getCell(`A${wordsIdx}`);
+        wordCell.value = `GRAND TOTAL IN WORDS (कुल महायोग शब्दों में): ${words}`;
+        wordCell.font = { name: 'Arial', size: 9, bold: true, color: { argb: 'FF0F172A' } };
+        wordCell.alignment = { horizontal: 'left', vertical: 'middle' };
+        wordCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8FAFC' } };
+        wordCell.border = {
+          top: { style: 'thin', color: { argb: 'FF000000' } },
+          bottom: { style: 'thin', color: { argb: 'FF000000' } },
+          left: { style: 'thin', color: { argb: 'FF000000' } },
+          right: { style: 'thin', color: { argb: 'FF000000' } }
+        };
+        
+        // 7. Signature lines
+        const sigIdx2 = wordsIdx + 3;
+        worksheet.addRow([]); // Blank
+        worksheet.addRow([]); // Blank
+        worksheet.addRow([]); // Blank for signatures
+        
+        worksheet.mergeCells(`A${sigIdx2}:C${sigIdx2}`);
+        worksheet.getCell(`A${sigIdx2}`).value = 'Signature of Teacher\n(शिक्षक के हस्ताक्षर)';
+        worksheet.getCell(`A${sigIdx2}`).font = { name: 'Arial', size: 9, bold: true };
+        worksheet.getCell(`A${sigIdx2}`).alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+        
+        worksheet.mergeCells(`G${sigIdx2}:I${sigIdx2}`);
+        worksheet.getCell(`G${sigIdx2}`).value = 'Signature of Headmaster\n(प्रधानाध्यापक के हस्ताक्षर)';
+        worksheet.getCell(`G${sigIdx2}`).font = { name: 'Arial', size: 9, bold: true };
+        worksheet.getCell(`G${sigIdx2}`).alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+        
+        worksheet.mergeCells(`M${sigIdx2}:Q${sigIdx2}`);
+        worksheet.getCell(`M${sigIdx2}`).value = 'Counter Signed by B.E.O.\n(प्रखंड शिक्षा पदाधिकारी के प्रतिहस्ताक्षर)';
+        worksheet.getCell(`M${sigIdx2}`).font = { name: 'Arial', size: 9, bold: true };
+        worksheet.getCell(`M${sigIdx2}`).alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+        
+        worksheet.getRow(sigIdx2).height = 40;
+        
+        // Adjust column widths individually
+        worksheet.getColumn(1).width = 16; // Month
+        worksheet.getColumn(2).width = 11; // No of Days
+        for (let col = 3; col <= 17; col++) {
+          worksheet.getColumn(col).width = 12.5;
+        }
+      };
+
       // Add Consolidated Sheet
       const consolidatedSheet = workbook.addWorksheet('Consolidated Arrear');
-      buildSheet(consolidatedSheet, rows, 'Consolidated');
+      if (activeFormat === 'salary') {
+        buildSheet(consolidatedSheet, rows, 'Consolidated');
+      } else {
+        buildSheetDA(consolidatedSheet, rows, 'Consolidated');
+      }
       
       // Add additional sheets for page blocks if we have multiple page groups
       const pageGroups = getPageGroups();
@@ -1578,7 +1920,11 @@ export default function SalaryArrearPortal() {
             .replace(/[:/?*\[\]]/g, '')
             .substring(0, 31);
           const blockSheet = workbook.addWorksheet(sanitizedSheetName);
-          buildSheet(blockSheet, group.rows, group.label);
+          if (activeFormat === 'salary') {
+            buildSheet(blockSheet, group.rows, group.label);
+          } else {
+            buildSheetDA(blockSheet, group.rows, group.label);
+          }
         });
       }
       
@@ -1589,7 +1935,8 @@ export default function SalaryArrearPortal() {
       const anchor = document.createElement('a');
       anchor.href = url;
       const teacherNameClean = (teacherInfo.teacherName || 'Report').replace(/\s+/g, '_');
-      anchor.download = `Salary_Arrear_DPO_${teacherNameClean}.xlsx`;
+      const filePrefix = activeFormat === 'salary' ? 'Salary_Arrear_DPO' : 'DA_Arrear_DPO';
+      anchor.download = `${filePrefix}_${teacherNameClean}.xlsx`;
       anchor.click();
       window.URL.revokeObjectURL(url);
     } catch (error) {
@@ -2765,42 +3112,73 @@ export default function SalaryArrearPortal() {
               </div>
             </div>
 
-            {/* Pagination settings */}
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-slate-50 p-2 rounded border border-slate-200/60 text-xs">
-              <span className="font-bold text-slate-700">PDF पेज सेटिंग (PDF Page Fit):</span>
-              <div className="flex flex-wrap gap-1">
-                <button
-                  onClick={() => setPdfPageSplitMode('six-months')}
-                  className={`px-2.5 py-1 rounded text-[11px] font-bold transition-all cursor-pointer ${
-                    pdfPageSplitMode === 'six-months'
-                      ? 'bg-indigo-600 text-white shadow-sm'
-                      : 'text-slate-600 hover:bg-slate-200 bg-white border border-slate-200'
-                  }`}
-                >
-                  6-महीने का ब्लॉक (Standard)
-                </button>
-                <button
-                  onClick={() => setPdfPageSplitMode('yearly')}
-                  className={`px-2.5 py-1 rounded text-[11px] font-bold transition-all cursor-pointer ${
-                    pdfPageSplitMode === 'yearly'
-                      ? 'bg-indigo-600 text-white shadow-sm'
-                      : 'text-slate-600 hover:bg-slate-200 bg-white border border-slate-200'
-                  }`}
-                  title="12 months per page, perfect to fit 1-2 pages"
-                >
-                  12-महीने का ब्लॉक (Yearly)
-                </button>
-                <button
-                  onClick={() => setPdfPageSplitMode('single-page')}
-                  className={`px-2.5 py-1 rounded text-[11px] font-bold transition-all cursor-pointer ${
-                    pdfPageSplitMode === 'single-page'
-                      ? 'bg-indigo-600 text-white shadow-sm'
-                      : 'text-slate-600 hover:bg-slate-200 bg-white border border-slate-200'
-                  }`}
-                  title="Fit everything in a single landscape page"
-                >
-                  एक ही पेज में (1 Page Fit)
-                </button>
+            {/* Format Selection & Pagination settings */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 bg-slate-50 p-3 rounded border border-slate-200/60 text-xs">
+              <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+                <span className="font-bold text-slate-700 flex items-center gap-1">
+                  <Settings className="w-3.5 h-3.5 text-indigo-600" />
+                  प्रिंट फॉर्मेट (Print Format):
+                </span>
+                <div className="flex gap-1">
+                  <button
+                    onClick={() => setActiveFormat('salary')}
+                    className={`px-3 py-1 rounded text-[11px] font-bold transition-all cursor-pointer ${
+                      activeFormat === 'salary'
+                        ? 'bg-indigo-600 text-white shadow-sm'
+                        : 'text-slate-600 hover:bg-slate-200 bg-white border border-slate-200'
+                    }`}
+                  >
+                    सैलरी एरियर (Salary Arrear)
+                  </button>
+                  <button
+                    onClick={() => setActiveFormat('da')}
+                    className={`px-3 py-1 rounded text-[11px] font-bold transition-all cursor-pointer ${
+                      activeFormat === 'da'
+                        ? 'bg-indigo-600 text-white shadow-sm'
+                        : 'text-slate-600 hover:bg-slate-200 bg-white border border-slate-200'
+                    }`}
+                  >
+                    डी०ए० एरियर (D.A. Arrear)
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between md:justify-end gap-2">
+                <span className="font-bold text-slate-700">PDF पेज सेटिंग (PDF Page Fit):</span>
+                <div className="flex flex-wrap gap-1">
+                  <button
+                    onClick={() => setPdfPageSplitMode('six-months')}
+                    className={`px-2.5 py-1 rounded text-[11px] font-bold transition-all cursor-pointer ${
+                      pdfPageSplitMode === 'six-months'
+                        ? 'bg-indigo-600 text-white shadow-sm'
+                        : 'text-slate-600 hover:bg-slate-200 bg-white border border-slate-200'
+                    }`}
+                  >
+                    6-महीने का ब्लॉक (Standard)
+                  </button>
+                  <button
+                    onClick={() => setPdfPageSplitMode('yearly')}
+                    className={`px-2.5 py-1 rounded text-[11px] font-bold transition-all cursor-pointer ${
+                      pdfPageSplitMode === 'yearly'
+                        ? 'bg-indigo-600 text-white shadow-sm'
+                        : 'text-slate-600 hover:bg-slate-200 bg-white border border-slate-200'
+                    }`}
+                    title="12 months per page, perfect to fit 1-2 pages"
+                  >
+                    12-महीने का ब्लॉक (Yearly)
+                  </button>
+                  <button
+                    onClick={() => setPdfPageSplitMode('single-page')}
+                    className={`px-2.5 py-1 rounded text-[11px] font-bold transition-all cursor-pointer ${
+                      pdfPageSplitMode === 'single-page'
+                        ? 'bg-indigo-600 text-white shadow-sm'
+                        : 'text-slate-600 hover:bg-slate-200 bg-white border border-slate-200'
+                    }`}
+                    title="Fit everything in a single landscape page"
+                  >
+                    एक ही पेज में (1 Page Fit)
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -2820,15 +3198,15 @@ export default function SalaryArrearPortal() {
                 const pageBalances = pageGroups.map((group, idx) => {
                   const opening = pageGroups
                     .slice(0, idx)
-                    .reduce((sum, g) => sum + getPageTotal(g.rows, 'diff', 'net'), 0);
-                  const pageNetDiff = getPageTotal(group.rows, 'diff', 'net');
+                    .reduce((sum, g) => sum + getPageNetDiff(g.rows), 0);
+                  const pageNetDiff = getPageNetDiff(group.rows);
                   const closing = opening + pageNetDiff;
                   return { opening, closing };
                 });
 
                 return pageGroups.map((group, pageIdx) => {
                   const isLastPage = pageIdx === pageGroups.length - 1;
-                  const pageNetDiff = getPageTotal(group.rows, 'diff', 'net');
+                  const pageNetDiff = getPageNetDiff(group.rows);
                   const pageOpeningBalance = pageBalances[pageIdx]?.opening ?? 0;
                   const pageClosingBalance = pageBalances[pageIdx]?.closing ?? 0;
 
@@ -2899,7 +3277,7 @@ export default function SalaryArrearPortal() {
                           OFFICE, DPO ESTABLISHMENT MUZAFFARPUR
                         </h2>
                         <h3 className="text-xs sm:text-sm font-extrabold tracking-widest uppercase mt-0.5 underline font-serif text-print-black">
-                          SALARY ARREAR FORMAT ({group.label})
+                          {activeFormat === 'salary' ? 'SALARY ARREAR FORMAT' : 'D.A. ARREAR FORMAT'} ({group.label})
                         </h3>
                       </div>
 
@@ -2945,157 +3323,319 @@ export default function SalaryArrearPortal() {
                         </div>
                       </div>
 
-                      {/* Massive 26-column official table */}
-                      <div className={tableContainerClass}>
-                        <table className="w-full text-center border-collapse border-black">
-                          <thead>
-                            
-                            {/* Header Row 1 */}
-                            <tr className="bg-slate-100/50">
-                              <th className={`border border-black font-bold text-center ${tableFirstHeaderPadding} w-[65px]`} rowSpan={2}>MONTH</th>
-                              <th className={`border border-black font-bold text-center ${tableFirstHeaderPadding} w-[40px]`} rowSpan={2}>No of Days</th>
+                       {/* Dynamic conditional table rendering based on activeFormat */}
+                      {activeFormat === 'salary' ? (
+                        <div className={tableContainerClass}>
+                          <table className="w-full text-center border-collapse border-black">
+                            <thead>
                               
-                              {/* DUE Headers */}
-                              <th className="border border-black font-extrabold uppercase py-1 text-center bg-emerald-500/10" colSpan={8}>DUE</th>
-                              
-                              {/* DRAWN Headers */}
-                              <th className="border border-black font-extrabold uppercase py-1 text-center bg-indigo-500/10" colSpan={8}>DRAWN</th>
-                              
-                              {/* DIFFERENCE Headers */}
-                              <th className="border border-black font-extrabold uppercase py-1 text-center bg-amber-500/10" colSpan={8}>DIFFERENCE</th>
-                            </tr>
-
-                            {/* Header Row 2 */}
-                            <tr className={`bg-slate-50/50 ${tableHeaderFontSize} font-bold`}>
-                              {/* DUE sub-columns */}
-                              <th className="border border-black px-0.5 py-0.5 bg-emerald-500/5">Basic Pay</th>
-                              <th className="border border-black px-0.5 py-0.5 bg-emerald-500/5">D.A.</th>
-                              <th className="border border-black px-0.5 py-0.5 bg-emerald-500/5">H.R.A.</th>
-                              <th className="border border-black px-0.5 py-0.5 bg-emerald-500/5">M.A.</th>
-                              <th className="border border-black px-0.5 py-0.5 font-bold bg-emerald-500/5">GROSS PAY</th>
-                              <th className="border border-black px-0.5 py-0.5 bg-emerald-500/5">NPS</th>
-                              <th className="border border-black px-0.5 py-0.5 bg-emerald-500/5">GIS</th>
-                              <th className="border border-black px-0.5 py-0.5 font-bold bg-emerald-500/5">NET PAY</th>
-
-                              {/* DRAWN sub-columns */}
-                              <th className="border border-black px-0.5 py-0.5 bg-indigo-500/5">Basic Pay</th>
-                              <th className="border border-black px-0.5 py-0.5 bg-indigo-500/5">D.A.</th>
-                              <th className="border border-black px-0.5 py-0.5 bg-indigo-500/5">H.R.A.</th>
-                              <th className="border border-black px-0.5 py-0.5 bg-indigo-500/5">M.A.</th>
-                              <th className="border border-black px-0.5 py-0.5 font-bold bg-indigo-500/5">GROSS PAY</th>
-                              <th className="border border-black px-0.5 py-0.5 bg-indigo-500/5">NPS</th>
-                              <th className="border border-black px-0.5 py-0.5 bg-indigo-500/5">GIS</th>
-                              <th className="border border-black px-0.5 py-0.5 font-bold bg-indigo-500/5">NET PAY</th>
-
-                              {/* DIFFERENCE sub-columns */}
-                              <th className="border border-black px-0.5 py-0.5 bg-amber-500/5">Basic Pay</th>
-                              <th className="border border-black px-0.5 py-0.5 bg-amber-500/5">D.A.</th>
-                              <th className="border border-black px-0.5 py-0.5 bg-amber-500/5">H.R.A.</th>
-                              <th className="border border-black px-0.5 py-0.5 bg-amber-500/5">M.A.</th>
-                              <th className="border border-black px-0.5 py-0.5 font-bold bg-amber-500/5">GROSS PAY</th>
-                              <th className="border border-black px-0.5 py-0.5 bg-amber-500/5">NPS</th>
-                              <th className="border border-black px-0.5 py-0.5 bg-amber-500/5">GIS</th>
-                              <th className="border border-black px-0.5 py-0.5 font-bold bg-amber-500/5">NET PAY</th>
-                            </tr>
-
-                          </thead>
-                          <tbody>
-                            {/* Dynamic Month Rows */}
-                            {group.rows.map(row => (
-                              <tr key={row.id} className={`hover:bg-slate-50 ${tableRowClass}`}>
-                                {/* Month Info */}
-                                <td className={`border border-black font-sans font-semibold text-center ${tableCellPadding}`}>{row.month}</td>
-                                <td className={`border border-black text-center ${tableCellPadding}`}>{row.days}</td>
-
-                                {/* DUE values */}
-                                <td className={`border border-black text-right pr-0.5 ${tableCellPadding}`}>{row.due.basic || '—'}</td>
-                                <td className={`border border-black text-right pr-0.5 ${tableCellPadding}`}>{row.due.da || '—'}</td>
-                                <td className={`border border-black text-right pr-0.5 ${tableCellPadding}`}>{row.due.hra || '—'}</td>
-                                <td className={`border border-black text-right pr-0.5 ${tableCellPadding}`}>{row.due.ma || '—'}</td>
-                                <td className={`border border-black text-right pr-0.5 font-bold ${tableCellPadding} bg-emerald-500/5`}>{row.due.gross || '—'}</td>
-                                <td className={`border border-black text-right pr-0.5 ${tableCellPadding}`}>{row.due.nps || '0'}</td>
-                                <td className={`border border-black text-right pr-0.5 ${tableCellPadding}`}>{row.due.gis || '—'}</td>
-                                <td className={`border border-black text-right pr-0.5 font-extrabold ${tableCellPadding} bg-emerald-500/10`}>{row.due.net || '—'}</td>
-
-                                {/* DRAWN values */}
-                                <td className={`border border-black text-right pr-0.5 ${tableCellPadding}`}>{row.drawn.basic || '—'}</td>
-                                <td className={`border border-black text-right pr-0.5 ${tableCellPadding}`}>{row.drawn.da || '—'}</td>
-                                <td className={`border border-black text-right pr-0.5 ${tableCellPadding}`}>{row.drawn.hra || '—'}</td>
-                                <td className={`border border-black text-right pr-0.5 ${tableCellPadding}`}>{row.drawn.ma || '—'}</td>
-                                <td className={`border border-black text-right pr-0.5 font-bold ${tableCellPadding} bg-indigo-500/5`}>{row.drawn.gross || '—'}</td>
-                                <td className={`border border-black text-right pr-0.5 ${tableCellPadding}`}>{row.drawn.nps || '0'}</td>
-                                <td className={`border border-black text-right pr-0.5 ${tableCellPadding}`}>{row.drawn.gis || '—'}</td>
-                                <td className={`border border-black text-right pr-0.5 font-extrabold ${tableCellPadding} bg-indigo-500/10`}>{row.drawn.net || '—'}</td>
-
-                                {/* DIFFERENCE values */}
-                                <td className={`border border-black text-right pr-0.5 font-bold text-slate-800 ${tableCellPadding}`}>{row.diff.basic || '0'}</td>
-                                <td className={`border border-black text-right pr-0.5 ${tableCellPadding}`}>{row.diff.da || '0'}</td>
-                                <td className={`border border-black text-right pr-0.5 ${tableCellPadding}`}>{row.diff.hra || '0'}</td>
-                                <td className={`border border-black text-right pr-0.5 ${tableCellPadding}`}>{row.diff.ma || '0'}</td>
-                                <td className={`border border-black text-right pr-0.5 font-bold ${tableCellPadding} bg-amber-500/5`}>{row.diff.gross || '0'}</td>
-                                <td className={`border border-black text-right pr-0.5 ${tableCellPadding}`}>{row.diff.nps || '0'}</td>
-                                <td className={`border border-black text-right pr-0.5 ${tableCellPadding}`}>{row.diff.gis || '0'}</td>
-                                <td className={`border border-black text-right pr-0.5 font-extrabold ${tableCellPadding} bg-amber-500/10 text-print-black`}>{row.diff.net || '0'}</td>
+                              {/* Header Row 1 */}
+                              <tr className="bg-slate-100/50">
+                                <th className={`border border-black font-bold text-center ${tableFirstHeaderPadding} w-[65px]`} rowSpan={2}>MONTH</th>
+                                <th className={`border border-black font-bold text-center ${tableFirstHeaderPadding} w-[40px]`} rowSpan={2}>No of Days</th>
+                                
+                                {/* DUE Headers */}
+                                <th className="border border-black font-extrabold uppercase py-1 text-center bg-emerald-500/10" colSpan={8}>DUE</th>
+                                
+                                {/* DRAWN Headers */}
+                                <th className="border border-black font-extrabold uppercase py-1 text-center bg-indigo-500/10" colSpan={8}>DRAWN</th>
+                                
+                                {/* DIFFERENCE Headers */}
+                                <th className="border border-black font-extrabold uppercase py-1 text-center bg-amber-500/10" colSpan={8}>DIFFERENCE</th>
                               </tr>
-                            ))}
 
-                            {/* PAGE TOTAL ROW */}
-                            <tr className={`font-mono font-bold bg-slate-100 ${tableRowClass}`}>
-                              <td className={`border-2 border-black font-sans font-bold text-center ${pageTotalCellPadding}`} colSpan={2}>PAGE TOTAL</td>
+                              {/* Header Row 2 */}
+                              <tr className={`bg-slate-50/50 ${tableHeaderFontSize} font-bold`}>
+                                {/* DUE sub-columns */}
+                                <th className="border border-black px-0.5 py-0.5 bg-emerald-500/5">Basic Pay</th>
+                                <th className="border border-black px-0.5 py-0.5 bg-emerald-500/5">D.A.</th>
+                                <th className="border border-black px-0.5 py-0.5 bg-emerald-500/5">H.R.A.</th>
+                                <th className="border border-black px-0.5 py-0.5 bg-emerald-500/5">M.A.</th>
+                                <th className="border border-black px-0.5 py-0.5 font-bold bg-emerald-500/5">GROSS PAY</th>
+                                <th className="border border-black px-0.5 py-0.5 bg-emerald-500/5">NPS</th>
+                                <th className="border border-black px-0.5 py-0.5 bg-emerald-500/5">GIS</th>
+                                <th className="border border-black px-0.5 py-0.5 font-bold bg-emerald-500/5">NET PAY</th>
+
+                                {/* DRAWN sub-columns */}
+                                <th className="border border-black px-0.5 py-0.5 bg-indigo-500/5">Basic Pay</th>
+                                <th className="border border-black px-0.5 py-0.5 bg-indigo-500/5">D.A.</th>
+                                <th className="border border-black px-0.5 py-0.5 bg-indigo-500/5">H.R.A.</th>
+                                <th className="border border-black px-0.5 py-0.5 bg-indigo-500/5">M.A.</th>
+                                <th className="border border-black px-0.5 py-0.5 font-bold bg-indigo-500/5">GROSS PAY</th>
+                                <th className="border border-black px-0.5 py-0.5 bg-indigo-500/5">NPS</th>
+                                <th className="border border-black px-0.5 py-0.5 bg-indigo-500/5">GIS</th>
+                                <th className="border border-black px-0.5 py-0.5 font-bold bg-indigo-500/5">NET PAY</th>
+
+                                {/* DIFFERENCE sub-columns */}
+                                <th className="border border-black px-0.5 py-0.5 bg-amber-500/5">Basic Pay</th>
+                                <th className="border border-black px-0.5 py-0.5 bg-amber-500/5">D.A.</th>
+                                <th className="border border-black px-0.5 py-0.5 bg-amber-500/5">H.R.A.</th>
+                                <th className="border border-black px-0.5 py-0.5 bg-amber-500/5">M.A.</th>
+                                <th className="border border-black px-0.5 py-0.5 font-bold bg-amber-500/5">GROSS PAY</th>
+                                <th className="border border-black px-0.5 py-0.5 bg-amber-500/5">NPS</th>
+                                <th className="border border-black px-0.5 py-0.5 bg-amber-500/5">GIS</th>
+                                <th className="border border-black px-0.5 py-0.5 font-bold bg-amber-500/5">NET PAY</th>
+                              </tr>
+
+                            </thead>
+                            <tbody>
+                              {/* Dynamic Month Rows */}
+                              {group.rows.map(row => (
+                                <tr key={row.id} className={`hover:bg-slate-50 ${tableRowClass}`}>
+                                  {/* Month Info */}
+                                  <td className={`border border-black font-sans font-semibold text-center ${tableCellPadding}`}>{row.month}</td>
+                                  <td className={`border border-black text-center ${tableCellPadding}`}>{row.days}</td>
+
+                                  {/* DUE values */}
+                                  <td className={`border border-black text-right pr-0.5 ${tableCellPadding}`}>{row.due.basic || '—'}</td>
+                                  <td className={`border border-black text-right pr-0.5 ${tableCellPadding}`}>{row.due.da || '—'}</td>
+                                  <td className={`border border-black text-right pr-0.5 ${tableCellPadding}`}>{row.due.hra || '—'}</td>
+                                  <td className={`border border-black text-right pr-0.5 ${tableCellPadding}`}>{row.due.ma || '—'}</td>
+                                  <td className={`border border-black text-right pr-0.5 font-bold ${tableCellPadding} bg-emerald-500/5`}>{row.due.gross || '—'}</td>
+                                  <td className={`border border-black text-right pr-0.5 ${tableCellPadding}`}>{row.due.nps || '0'}</td>
+                                  <td className={`border border-black text-right pr-0.5 ${tableCellPadding}`}>{row.due.gis || '—'}</td>
+                                  <td className={`border border-black text-right pr-0.5 font-extrabold ${tableCellPadding} bg-emerald-500/10`}>{row.due.net || '—'}</td>
+
+                                  {/* DRAWN values */}
+                                  <td className={`border border-black text-right pr-0.5 ${tableCellPadding}`}>{row.drawn.basic || '—'}</td>
+                                  <td className={`border border-black text-right pr-0.5 ${tableCellPadding}`}>{row.drawn.da || '—'}</td>
+                                  <td className={`border border-black text-right pr-0.5 ${tableCellPadding}`}>{row.drawn.hra || '—'}</td>
+                                  <td className={`border border-black text-right pr-0.5 ${tableCellPadding}`}>{row.drawn.ma || '—'}</td>
+                                  <td className={`border border-black text-right pr-0.5 font-bold ${tableCellPadding} bg-indigo-500/5`}>{row.drawn.gross || '—'}</td>
+                                  <td className={`border border-black text-right pr-0.5 ${tableCellPadding}`}>{row.drawn.nps || '0'}</td>
+                                  <td className={`border border-black text-right pr-0.5 ${tableCellPadding}`}>{row.drawn.gis || '—'}</td>
+                                  <td className={`border border-black text-right pr-0.5 font-extrabold ${tableCellPadding} bg-indigo-500/10`}>{row.drawn.net || '—'}</td>
+
+                                  {/* DIFFERENCE values */}
+                                  <td className={`border border-black text-right pr-0.5 font-bold text-slate-800 ${tableCellPadding}`}>{row.diff.basic || '0'}</td>
+                                  <td className={`border border-black text-right pr-0.5 ${tableCellPadding}`}>{row.diff.da || '0'}</td>
+                                  <td className={`border border-black text-right pr-0.5 ${tableCellPadding}`}>{row.diff.hra || '0'}</td>
+                                  <td className={`border border-black text-right pr-0.5 ${tableCellPadding}`}>{row.diff.ma || '0'}</td>
+                                  <td className={`border border-black text-right pr-0.5 font-bold ${tableCellPadding} bg-amber-500/5`}>{row.diff.gross || '0'}</td>
+                                  <td className={`border border-black text-right pr-0.5 ${tableCellPadding}`}>{row.diff.nps || '0'}</td>
+                                  <td className={`border border-black text-right pr-0.5 ${tableCellPadding}`}>{row.diff.gis || '0'}</td>
+                                  <td className={`border border-black text-right pr-0.5 font-extrabold ${tableCellPadding} bg-amber-500/10 text-print-black`}>{row.diff.net || '0'}</td>
+                                </tr>
+                              ))}
+
+                              {/* PAGE TOTAL ROW */}
+                              <tr className={`font-mono font-bold bg-slate-100 ${tableRowClass}`}>
+                                <td className={`border-2 border-black font-sans font-bold text-center ${pageTotalCellPadding}`} colSpan={2}>PAGE TOTAL</td>
+                                
+                                {/* DUE Totals */}
+                                <td className={`border border-black text-right pr-0.5 ${pageTotalCellPadding}`}>{getPageTotal(group.rows, 'due', 'basic').toLocaleString()}</td>
+                                <td className={`border border-black text-right pr-0.5 ${pageTotalCellPadding}`}>{getPageTotal(group.rows, 'due', 'da').toLocaleString()}</td>
+                                <td className={`border border-black text-right pr-0.5 ${pageTotalCellPadding}`}>{getPageTotal(group.rows, 'due', 'hra').toLocaleString()}</td>
+                                <td className={`border border-black text-right pr-0.5 ${pageTotalCellPadding}`}>{getPageTotal(group.rows, 'due', 'ma').toLocaleString()}</td>
+                                <td className={`border border-black text-right pr-0.5 font-extrabold ${pageTotalCellPadding} bg-emerald-500/10`}>{getPageTotal(group.rows, 'due', 'gross').toLocaleString()}</td>
+                                <td className={`border border-black text-right pr-0.5 ${pageTotalCellPadding}`}>{getPageTotal(group.rows, 'due', 'nps').toLocaleString()}</td>
+                                <td className={`border border-black text-right pr-0.5 ${pageTotalCellPadding}`}>{getPageTotal(group.rows, 'due', 'gis').toLocaleString()}</td>
+                                <td className={`border border-black text-right pr-0.5 font-extrabold ${pageTotalCellPadding} bg-emerald-500/20`}>{getPageTotal(group.rows, 'due', 'net').toLocaleString()}</td>
+
+                                {/* DRAWN Totals */}
+                                <td className={`border border-black text-right pr-0.5 ${pageTotalCellPadding}`}>{getPageTotal(group.rows, 'drawn', 'basic').toLocaleString()}</td>
+                                <td className={`border border-black text-right pr-0.5 ${pageTotalCellPadding}`}>{getPageTotal(group.rows, 'drawn', 'da').toLocaleString()}</td>
+                                <td className={`border border-black text-right pr-0.5 ${pageTotalCellPadding}`}>{getPageTotal(group.rows, 'drawn', 'hra').toLocaleString()}</td>
+                                <td className={`border border-black text-right pr-0.5 ${pageTotalCellPadding}`}>{getPageTotal(group.rows, 'drawn', 'ma').toLocaleString()}</td>
+                                <td className={`border border-black text-right pr-0.5 font-extrabold ${pageTotalCellPadding} bg-indigo-500/10`}>{getPageTotal(group.rows, 'drawn', 'gross').toLocaleString()}</td>
+                                <td className={`border border-black text-right pr-0.5 ${pageTotalCellPadding}`}>{getPageTotal(group.rows, 'drawn', 'nps').toLocaleString()}</td>
+                                <td className={`border border-black text-right pr-0.5 ${pageTotalCellPadding}`}>{getPageTotal(group.rows, 'drawn', 'gis').toLocaleString()}</td>
+                                <td className={`border border-black text-right pr-0.5 font-extrabold ${pageTotalCellPadding} bg-indigo-500/20`}>{getPageTotal(group.rows, 'drawn', 'net').toLocaleString()}</td>
+
+                                {/* DIFFERENCE Totals */}
+                                <td className={`border-2 border-black text-right pr-0.5 ${pageTotalCellPadding}`}>{getPageTotal(group.rows, 'diff', 'basic').toLocaleString()}</td>
+                                <td className={`border-2 border-black text-right pr-0.5 ${pageTotalCellPadding}`}>{getPageTotal(group.rows, 'diff', 'da').toLocaleString()}</td>
+                                <td className={`border-2 border-black text-right pr-0.5 ${pageTotalCellPadding}`}>{getPageTotal(group.rows, 'diff', 'hra').toLocaleString()}</td>
+                                <td className={`border-2 border-black text-right pr-0.5 ${pageTotalCellPadding}`}>{getPageTotal(group.rows, 'diff', 'ma').toLocaleString()}</td>
+                                <td className={`border-2 border-black text-right pr-0.5 font-extrabold ${pageTotalCellPadding} bg-amber-500/10`}>{getPageTotal(group.rows, 'diff', 'gross').toLocaleString()}</td>
+                                <td className={`border-2 border-black text-right pr-0.5 ${pageTotalCellPadding}`}>{getPageTotal(group.rows, 'diff', 'nps').toLocaleString()}</td>
+                                <td className={`border-2 border-black text-right pr-0.5 ${pageTotalCellPadding}`}>{getPageTotal(group.rows, 'diff', 'gis').toLocaleString()}</td>
+                                <td className={`border-2 border-black text-right pr-0.5 font-extrabold ${pageTotalCellPadding} bg-amber-500/20 text-print-black`}>{pageNetDiff.toLocaleString()}</td>
+                              </tr>
+
+                              {/* OPENING DIFFERENCE BALANCE ROW */}
+                              <tr className={`font-mono font-bold bg-amber-50/20 ${tableRowClass}`}>
+                                <td className={`border border-black text-left pl-2 font-sans text-amber-900 ${tableCellPadding}`} colSpan={18}>
+                                  OPENING BALANCE OF DIFFERENCE (प्रारंभिक अंतर राशि शेष)
+                                </td>
+                                <td className={`border border-black text-right pr-1 font-extrabold bg-amber-500/5 text-print-black ${tableCellPadding}`} colSpan={8}>
+                                  ₹{pageOpeningBalance.toLocaleString()}
+                                </td>
+                              </tr>
+
+                              {/* CLOSING DIFFERENCE BALANCE ROW */}
+                              <tr className={`font-mono font-extrabold bg-amber-500/10 ${tableRowClass}`}>
+                                <td className={`border-2 border-black text-left pl-2 font-sans text-amber-950 ${pageTotalCellPadding}`} colSpan={18}>
+                                  CLOSING BALANCE OF DIFFERENCE (अंतिम अंतर राशि शेष)
+                                </td>
+                                <td className={`border-2 border-black text-right pr-1 font-extrabold bg-amber-500/25 text-amber-950 ${pageTotalCellPadding}`} colSpan={8}>
+                                  ₹{pageClosingBalance.toLocaleString()}
+                                </td>
+                              </tr>
+                            </tbody>
+                          </table>
+                        </div>
+                      ) : (
+                        <div className={tableContainerClass}>
+                          <table className="w-full text-center border-collapse border-black">
+                            <thead>
                               
-                              {/* DUE Totals */}
-                              <td className={`border border-black text-right pr-0.5 ${pageTotalCellPadding}`}>{getPageTotal(group.rows, 'due', 'basic').toLocaleString()}</td>
-                              <td className={`border border-black text-right pr-0.5 ${pageTotalCellPadding}`}>{getPageTotal(group.rows, 'due', 'da').toLocaleString()}</td>
-                              <td className={`border border-black text-right pr-0.5 ${pageTotalCellPadding}`}>{getPageTotal(group.rows, 'due', 'hra').toLocaleString()}</td>
-                              <td className={`border border-black text-right pr-0.5 ${pageTotalCellPadding}`}>{getPageTotal(group.rows, 'due', 'ma').toLocaleString()}</td>
-                              <td className={`border border-black text-right pr-0.5 font-extrabold ${pageTotalCellPadding} bg-emerald-500/10`}>{getPageTotal(group.rows, 'due', 'gross').toLocaleString()}</td>
-                              <td className={`border border-black text-right pr-0.5 ${pageTotalCellPadding}`}>{getPageTotal(group.rows, 'due', 'nps').toLocaleString()}</td>
-                              <td className={`border border-black text-right pr-0.5 ${pageTotalCellPadding}`}>{getPageTotal(group.rows, 'due', 'gis').toLocaleString()}</td>
-                              <td className={`border border-black text-right pr-0.5 font-extrabold ${pageTotalCellPadding} bg-emerald-500/20`}>{getPageTotal(group.rows, 'due', 'net').toLocaleString()}</td>
+                              {/* Header Row 1 */}
+                              <tr className="bg-slate-100/50">
+                                <th className={`border border-black font-bold text-center ${tableFirstHeaderPadding} w-[65px]`} rowSpan={2}>MONTH</th>
+                                <th className={`border border-black font-bold text-center ${tableFirstHeaderPadding} w-[40px]`} rowSpan={2}>No of Days</th>
+                                
+                                {/* ADMISSIBLE Headers */}
+                                <th className="border border-black font-extrabold uppercase py-1 text-center bg-emerald-500/10" colSpan={5}>ADMISSIBLE</th>
+                                
+                                {/* DRAWN Headers */}
+                                <th className="border border-black font-extrabold uppercase py-1 text-center bg-indigo-500/10" colSpan={5}>DRAWN</th>
+                                
+                                {/* DIFFERENCE Headers */}
+                                <th className="border border-black font-extrabold uppercase py-1 text-center bg-amber-500/10" colSpan={5}>DIFFERENCE</th>
+                              </tr>
 
-                              {/* DRAWN Totals */}
-                              <td className={`border border-black text-right pr-0.5 ${pageTotalCellPadding}`}>{getPageTotal(group.rows, 'drawn', 'basic').toLocaleString()}</td>
-                              <td className={`border border-black text-right pr-0.5 ${pageTotalCellPadding}`}>{getPageTotal(group.rows, 'drawn', 'da').toLocaleString()}</td>
-                              <td className={`border border-black text-right pr-0.5 ${pageTotalCellPadding}`}>{getPageTotal(group.rows, 'drawn', 'hra').toLocaleString()}</td>
-                              <td className={`border border-black text-right pr-0.5 ${pageTotalCellPadding}`}>{getPageTotal(group.rows, 'drawn', 'ma').toLocaleString()}</td>
-                              <td className={`border border-black text-right pr-0.5 font-extrabold ${pageTotalCellPadding} bg-indigo-500/10`}>{getPageTotal(group.rows, 'drawn', 'gross').toLocaleString()}</td>
-                              <td className={`border border-black text-right pr-0.5 ${pageTotalCellPadding}`}>{getPageTotal(group.rows, 'drawn', 'nps').toLocaleString()}</td>
-                              <td className={`border border-black text-right pr-0.5 ${pageTotalCellPadding}`}>{getPageTotal(group.rows, 'drawn', 'gis').toLocaleString()}</td>
-                              <td className={`border border-black text-right pr-0.5 font-extrabold ${pageTotalCellPadding} bg-indigo-500/20`}>{getPageTotal(group.rows, 'drawn', 'net').toLocaleString()}</td>
+                              {/* Header Row 2 */}
+                              <tr className={`bg-slate-50/50 ${tableHeaderFontSize} font-bold`}>
+                                {/* ADMISSIBLE sub-columns */}
+                                <th className="border border-black px-0.5 py-0.5 bg-emerald-500/5">Basic Pay</th>
+                                <th className="border border-black px-0.5 py-0.5 bg-emerald-500/5">D.A.</th>
+                                <th className="border border-black px-0.5 py-0.5 font-bold bg-emerald-500/5">GROSS AMOUNT</th>
+                                <th className="border border-black px-0.5 py-0.5 bg-emerald-500/5">NPS</th>
+                                <th className="border border-black px-0.5 py-0.5 font-bold bg-emerald-500/5">NET AMOUNT</th>
 
-                              {/* DIFFERENCE Totals */}
-                              <td className={`border-2 border-black text-right pr-0.5 ${pageTotalCellPadding}`}>{getPageTotal(group.rows, 'diff', 'basic').toLocaleString()}</td>
-                              <td className={`border-2 border-black text-right pr-0.5 ${pageTotalCellPadding}`}>{getPageTotal(group.rows, 'diff', 'da').toLocaleString()}</td>
-                              <td className={`border-2 border-black text-right pr-0.5 ${pageTotalCellPadding}`}>{getPageTotal(group.rows, 'diff', 'hra').toLocaleString()}</td>
-                              <td className={`border-2 border-black text-right pr-0.5 ${pageTotalCellPadding}`}>{getPageTotal(group.rows, 'diff', 'ma').toLocaleString()}</td>
-                              <td className={`border-2 border-black text-right pr-0.5 font-extrabold ${pageTotalCellPadding} bg-amber-500/10`}>{getPageTotal(group.rows, 'diff', 'gross').toLocaleString()}</td>
-                              <td className={`border-2 border-black text-right pr-0.5 ${pageTotalCellPadding}`}>{getPageTotal(group.rows, 'diff', 'nps').toLocaleString()}</td>
-                              <td className={`border-2 border-black text-right pr-0.5 ${pageTotalCellPadding}`}>{getPageTotal(group.rows, 'diff', 'gis').toLocaleString()}</td>
-                              <td className={`border-2 border-black text-right pr-0.5 font-extrabold ${pageTotalCellPadding} bg-amber-500/20 text-print-black`}>{pageNetDiff.toLocaleString()}</td>
-                            </tr>
+                                {/* DRAWN sub-columns */}
+                                <th className="border border-black px-0.5 py-0.5 bg-indigo-500/5">Basic Pay</th>
+                                <th className="border border-black px-0.5 py-0.5 bg-indigo-500/5">D.A.</th>
+                                <th className="border border-black px-0.5 py-0.5 font-bold bg-indigo-500/5">GROSS AMOUNT</th>
+                                <th className="border border-black px-0.5 py-0.5 bg-indigo-500/5">NPS</th>
+                                <th className="border border-black px-0.5 py-0.5 font-bold bg-indigo-500/5">NET AMOUNT</th>
 
-                            {/* OPENING DIFFERENCE BALANCE ROW */}
-                            <tr className={`font-mono font-bold bg-amber-50/20 ${tableRowClass}`}>
-                              <td className={`border border-black text-left pl-2 font-sans text-amber-900 ${tableCellPadding}`} colSpan={18}>
-                                OPENING BALANCE OF DIFFERENCE (प्रारंभिक अंतर राशि शेष)
-                              </td>
-                              <td className={`border border-black text-right pr-1 font-extrabold bg-amber-500/5 text-print-black ${tableCellPadding}`} colSpan={8}>
-                                ₹{pageOpeningBalance.toLocaleString()}
-                              </td>
-                            </tr>
+                                {/* DIFFERENCE sub-columns */}
+                                <th className="border border-black px-0.5 py-0.5 bg-amber-500/5">Basic Pay</th>
+                                <th className="border border-black px-0.5 py-0.5 bg-amber-500/5">D.A.</th>
+                                <th className="border border-black px-0.5 py-0.5 font-bold bg-amber-500/5">GROSS AMOUNT</th>
+                                <th className="border border-black px-0.5 py-0.5 bg-amber-500/5">NPS</th>
+                                <th className="border border-black px-0.5 py-0.5 font-bold bg-amber-500/5">NET AMOUNT</th>
+                              </tr>
 
-                            {/* CLOSING DIFFERENCE BALANCE ROW */}
-                            <tr className={`font-mono font-extrabold bg-amber-500/10 ${tableRowClass}`}>
-                              <td className={`border-2 border-black text-left pl-2 font-sans text-amber-950 ${pageTotalCellPadding}`} colSpan={18}>
-                                CLOSING BALANCE OF DIFFERENCE (अंतिम अंतर राशि शेष)
-                              </td>
-                              <td className={`border-2 border-black text-right pr-1 font-extrabold bg-amber-500/25 text-amber-950 ${pageTotalCellPadding}`} colSpan={8}>
-                                ₹{pageClosingBalance.toLocaleString()}
-                              </td>
-                            </tr>
-                          </tbody>
-                        </table>
-                      </div>
+                            </thead>
+                            <tbody>
+                              {/* Dynamic Month Rows */}
+                              {group.rows.map(row => {
+                                const admGross = row.due.basic + row.due.da;
+                                const admNet = admGross - row.due.nps;
+                                
+                                const drwGross = row.drawn.basic + row.drawn.da;
+                                const drwNet = drwGross - row.drawn.nps;
+                                
+                                const diffBasic = row.due.basic - row.drawn.basic;
+                                const diffDa = row.due.da - row.drawn.da;
+                                const diffGross = admGross - drwGross;
+                                const diffNps = row.due.nps - row.drawn.nps;
+                                const diffNet = admNet - drwNet;
+
+                                return (
+                                  <tr key={row.id} className={`hover:bg-slate-50 ${tableRowClass}`}>
+                                    {/* Month Info */}
+                                    <td className={`border border-black font-sans font-semibold text-center ${tableCellPadding}`}>{row.month}</td>
+                                    <td className={`border border-black text-center ${tableCellPadding}`}>{row.days}</td>
+
+                                    {/* ADMISSIBLE values */}
+                                    <td className={`border border-black text-right pr-0.5 ${tableCellPadding}`}>{row.due.basic || '—'}</td>
+                                    <td className={`border border-black text-right pr-0.5 ${tableCellPadding}`}>{row.due.da || '—'}</td>
+                                    <td className={`border border-black text-right pr-0.5 font-bold ${tableCellPadding} bg-emerald-500/5`}>{admGross || '—'}</td>
+                                    <td className={`border border-black text-right pr-0.5 ${tableCellPadding}`}>{row.due.nps || '0'}</td>
+                                    <td className={`border border-black text-right pr-0.5 font-extrabold ${tableCellPadding} bg-emerald-500/10`}>{admNet || '—'}</td>
+
+                                    {/* DRAWN values */}
+                                    <td className={`border border-black text-right pr-0.5 ${tableCellPadding}`}>{row.drawn.basic || '—'}</td>
+                                    <td className={`border border-black text-right pr-0.5 ${tableCellPadding}`}>{row.drawn.da || '—'}</td>
+                                    <td className={`border border-black text-right pr-0.5 font-bold ${tableCellPadding} bg-indigo-500/5`}>{drwGross || '—'}</td>
+                                    <td className={`border border-black text-right pr-0.5 ${tableCellPadding}`}>{row.drawn.nps || '0'}</td>
+                                    <td className={`border border-black text-right pr-0.5 font-extrabold ${tableCellPadding} bg-indigo-500/10`}>{drwNet || '—'}</td>
+
+                                    {/* DIFFERENCE values */}
+                                    <td className={`border border-black text-right pr-0.5 font-bold text-slate-800 ${tableCellPadding}`}>{diffBasic || '0'}</td>
+                                    <td className={`border border-black text-right pr-0.5 ${tableCellPadding}`}>{diffDa || '0'}</td>
+                                    <td className={`border border-black text-right pr-0.5 font-bold ${tableCellPadding} bg-amber-500/5`}>{diffGross || '0'}</td>
+                                    <td className={`border border-black text-right pr-0.5 ${tableCellPadding}`}>{diffNps || '0'}</td>
+                                    <td className={`border border-black text-right pr-0.5 font-extrabold ${tableCellPadding} bg-amber-500/10 text-print-black`}>{diffNet || '0'}</td>
+                                  </tr>
+                                );
+                              })}
+
+                              {/* PAGE TOTAL ROW */}
+                              {(() => {
+                                const pageDueBasicTotal = getPageTotal(group.rows, 'due', 'basic');
+                                const pageDueDaTotal = getPageTotal(group.rows, 'due', 'da');
+                                const pageDueGrossTotal = pageDueBasicTotal + pageDueDaTotal;
+                                const pageDueNpsTotal = getPageTotal(group.rows, 'due', 'nps');
+                                const pageDueNetTotal = pageDueGrossTotal - pageDueNpsTotal;
+
+                                const pageDrawnBasicTotal = getPageTotal(group.rows, 'drawn', 'basic');
+                                const pageDrawnDaTotal = getPageTotal(group.rows, 'drawn', 'da');
+                                const pageDrawnGrossTotal = pageDrawnBasicTotal + pageDrawnDaTotal;
+                                const pageDrawnNpsTotal = getPageTotal(group.rows, 'drawn', 'nps');
+                                const pageDrawnNetTotal = pageDrawnGrossTotal - pageDrawnNpsTotal;
+
+                                const pageDiffBasicTotal = getPageTotal(group.rows, 'diff', 'basic');
+                                const pageDiffDaTotal = getPageTotal(group.rows, 'diff', 'da');
+                                const pageDiffGrossTotal = pageDueGrossTotal - pageDrawnGrossTotal;
+                                const pageDiffNpsTotal = getPageTotal(group.rows, 'diff', 'nps');
+                                const pageDiffNetTotal = pageDueNetTotal - pageDrawnNetTotal;
+
+                                return (
+                                  <tr className={`font-mono font-bold bg-slate-100 ${tableRowClass}`}>
+                                    <td className={`border-2 border-black font-sans font-bold text-center ${pageTotalCellPadding}`} colSpan={2}>PAGE TOTAL</td>
+                                    
+                                    {/* ADMISSIBLE Totals */}
+                                    <td className={`border border-black text-right pr-0.5 ${pageTotalCellPadding}`}>{pageDueBasicTotal.toLocaleString()}</td>
+                                    <td className={`border border-black text-right pr-0.5 ${pageTotalCellPadding}`}>{pageDueDaTotal.toLocaleString()}</td>
+                                    <td className={`border border-black text-right pr-0.5 font-extrabold ${pageTotalCellPadding} bg-emerald-500/10`}>{pageDueGrossTotal.toLocaleString()}</td>
+                                    <td className={`border border-black text-right pr-0.5 ${pageTotalCellPadding}`}>{pageDueNpsTotal.toLocaleString()}</td>
+                                    <td className={`border border-black text-right pr-0.5 font-extrabold ${pageTotalCellPadding} bg-emerald-500/20`}>{pageDueNetTotal.toLocaleString()}</td>
+
+                                    {/* DRAWN Totals */}
+                                    <td className={`border border-black text-right pr-0.5 ${pageTotalCellPadding}`}>{pageDrawnBasicTotal.toLocaleString()}</td>
+                                    <td className={`border border-black text-right pr-0.5 ${pageTotalCellPadding}`}>{pageDrawnDaTotal.toLocaleString()}</td>
+                                    <td className={`border border-black text-right pr-0.5 font-extrabold ${pageTotalCellPadding} bg-indigo-500/10`}>{pageDrawnGrossTotal.toLocaleString()}</td>
+                                    <td className={`border border-black text-right pr-0.5 ${pageTotalCellPadding}`}>{pageDrawnNpsTotal.toLocaleString()}</td>
+                                    <td className={`border border-black text-right pr-0.5 font-extrabold ${pageTotalCellPadding} bg-indigo-500/20`}>{pageDrawnNetTotal.toLocaleString()}</td>
+
+                                    {/* DIFFERENCE Totals */}
+                                    <td className={`border-2 border-black text-right pr-0.5 ${pageTotalCellPadding}`}>{pageDiffBasicTotal.toLocaleString()}</td>
+                                    <td className={`border-2 border-black text-right pr-0.5 ${pageTotalCellPadding}`}>{pageDiffDaTotal.toLocaleString()}</td>
+                                    <td className={`border-2 border-black text-right pr-0.5 font-extrabold ${pageTotalCellPadding} bg-amber-500/10`}>{pageDiffGrossTotal.toLocaleString()}</td>
+                                    <td className={`border-2 border-black text-right pr-0.5 ${pageTotalCellPadding}`}>{pageDiffNpsTotal.toLocaleString()}</td>
+                                    <td className={`border-2 border-black text-right pr-0.5 font-extrabold ${pageTotalCellPadding} bg-amber-500/20 text-print-black`}>{pageDiffNetTotal.toLocaleString()}</td>
+                                  </tr>
+                                );
+                              })()}
+
+                              {/* OPENING DIFFERENCE BALANCE ROW */}
+                              <tr className={`font-mono font-bold bg-amber-50/20 ${tableRowClass}`}>
+                                <td className={`border border-black text-left pl-2 font-sans text-amber-900 ${tableCellPadding}`} colSpan={12}>
+                                  OPENING BALANCE OF DIFFERENCE (प्रारंभिक अंतर राशि शेष)
+                                </td>
+                                <td className={`border border-black text-right pr-1 font-extrabold bg-amber-500/5 text-print-black ${tableCellPadding}`} colSpan={5}>
+                                  ₹{pageOpeningBalance.toLocaleString()}
+                                </td>
+                              </tr>
+
+                              {/* CLOSING DIFFERENCE BALANCE ROW */}
+                              <tr className={`font-mono font-extrabold bg-amber-500/10 ${tableRowClass}`}>
+                                <td className={`border-2 border-black text-left pl-2 font-sans text-amber-950 ${pageTotalCellPadding}`} colSpan={12}>
+                                  CLOSING BALANCE OF DIFFERENCE (अंतिम अंतर राशि शेष)
+                                </td>
+                                <td className={`border-2 border-black text-right pr-1 font-extrabold bg-amber-500/25 text-amber-950 ${pageTotalCellPadding}`} colSpan={5}>
+                                  ₹{pageClosingBalance.toLocaleString()}
+                                </td>
+                              </tr>
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
 
                       {/* Summary Blocks at Page Bottom */}
                       {isLastPage && (
