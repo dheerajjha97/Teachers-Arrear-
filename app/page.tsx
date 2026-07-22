@@ -165,6 +165,48 @@ function getMaxDaysInMonth(monthStr: string): number {
   return new Date(year, monthIdx + 1, 0).getDate();
 }
 
+// Helper to parse Date of Joining string in standard formats (DD-MM-YYYY, YYYY-MM-DD, DD/MM/YYYY, etc.)
+function parseDateOfJoining(dateStr: string): { day: number; monthIdx: number; year: number } | null {
+  if (!dateStr || !dateStr.trim()) return null;
+  const str = dateStr.trim();
+
+  // YYYY-MM-DD or YYYY/MM/DD or YYYY.MM.DD
+  let match = str.match(/^(\d{4})[-/\.](\d{1,2})[-/\.](\d{1,2})$/);
+  if (match) {
+    const year = parseInt(match[1], 10);
+    const monthIdx = parseInt(match[2], 10) - 1;
+    const day = parseInt(match[3], 10);
+    if (monthIdx >= 0 && monthIdx <= 11 && day >= 1 && day <= 31 && year >= 1970) {
+      return { day, monthIdx, year };
+    }
+  }
+
+  // DD-MM-YYYY or DD/MM/YYYY or DD.MM.YYYY
+  match = str.match(/^(\d{1,2})[-/\.](\d{1,2})[-/\.](\d{4})$/);
+  if (match) {
+    const day = parseInt(match[1], 10);
+    const monthIdx = parseInt(match[2], 10) - 1;
+    const year = parseInt(match[3], 10);
+    if (monthIdx >= 0 && monthIdx <= 11 && day >= 1 && day <= 31 && year >= 1970) {
+      return { day, monthIdx, year };
+    }
+  }
+
+  // DD Month YYYY (e.g., "15 Nov 2023" or "15 November 2023")
+  match = str.match(/^(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})$/);
+  if (match) {
+    const day = parseInt(match[1], 10);
+    const monthName = match[2].toLowerCase().substring(0, 3);
+    const year = parseInt(match[3], 10);
+    const monthIdx = MONTH_NAMES.findIndex(m => m.toLowerCase().startsWith(monthName));
+    if (monthIdx !== -1 && day >= 1 && day <= 31 && year >= 1970) {
+      return { day, monthIdx, year };
+    }
+  }
+
+  return null;
+}
+
 // Helper to determine Bihar government DA rate dynamically based on month & year
 function getAutoDaPercent(monthStr: string, fallbackVal: number): number {
   const match = monthStr.match(/([A-Za-z]+)\s+(\d{4}|\d{2})/);
@@ -688,23 +730,28 @@ export default function SalaryArrearPortal() {
     dueIndex: number,
     drawnIndex: number,
     drawnSame: boolean,
-    incMonth: "january" | "july" | "none"
+    incMonth: "january" | "july" | "none",
+    overrideStartM?: number,
+    overrideStartY?: number
   ) => {
     if (!activeFitment) return;
+
+    const effStartM = overrideStartM !== undefined ? overrideStartM : startMonth;
+    const effStartY = overrideStartY !== undefined ? overrideStartY : startYear;
 
     const updated = rows.map(row => {
       const defaultDue = getBasicSalaryForMonth(
         category,
-        startMonth,
-        startYear,
+        effStartM,
+        effStartY,
         dueIndex,
         incMonth,
         row.month
       );
       const defaultDrawn = getBasicSalaryForMonth(
         category,
-        startMonth,
-        startYear,
+        effStartM,
+        effStartY,
         drawnSame ? dueIndex : drawnIndex,
         incMonth,
         row.month
@@ -738,6 +785,112 @@ export default function SalaryArrearPortal() {
     });
 
     setRows(updated);
+  };
+
+  const handleDateOfJoiningUpdate = (newDateStr: string) => {
+    setTeacherInfo(prev => ({ ...prev, dateOfJoining: newDateStr }));
+    const parsed = parseDateOfJoining(newDateStr);
+    if (parsed) {
+      const sM = parsed.monthIdx;
+      const sY = parsed.year;
+      setStartMonth(sM);
+      setStartYear(sY);
+
+      const dueBasicVal = FITMENT_MATRIX[teacherCategory]?.[initialDueIndex - 1] || 25000;
+      const drawnBasicVal = FITMENT_MATRIX[teacherCategory]?.[(isDrawnBasicSame ? initialDueIndex : initialDrawnIndex) - 1] || 25000;
+      setStartDueBasic(dueBasicVal);
+      setStartDrawnBasic(drawnBasicVal);
+
+      if (useFitmentMatrix) {
+        updateExistingRowsWithFitment(
+          useFitmentMatrix,
+          teacherCategory,
+          initialDueIndex,
+          initialDrawnIndex,
+          isDrawnBasicSame,
+          incrementMonth,
+          sM,
+          sY
+        );
+      }
+    }
+  };
+
+  const autoFillFromJoiningDate = () => {
+    const parsed = parseDateOfJoining(teacherInfo.dateOfJoining);
+    const sM = parsed ? parsed.monthIdx : startMonth;
+    const sY = parsed ? parsed.year : startYear;
+    const sDay = parsed ? parsed.day : 1;
+
+    setStartMonth(sM);
+    setStartYear(sY);
+
+    const dueBasicVal = FITMENT_MATRIX[teacherCategory]?.[initialDueIndex - 1] || 25000;
+    const drawnBasicVal = FITMENT_MATRIX[teacherCategory]?.[(isDrawnBasicSame ? initialDueIndex : initialDrawnIndex) - 1] || 25000;
+    setStartDueBasic(dueBasicVal);
+    setStartDrawnBasic(drawnBasicVal);
+
+    if (rows.length > 0) {
+      updateExistingRowsWithFitment(
+        true,
+        teacherCategory,
+        initialDueIndex,
+        initialDrawnIndex,
+        isDrawnBasicSame,
+        incrementMonth,
+        sM,
+        sY
+      );
+    } else {
+      const generatedRows: ArrearRow[] = [];
+      let currentM = sM;
+      let currentY = sY;
+      const targetEndM = endMonth;
+      const targetEndY = endYear;
+
+      let loopLimit = 0;
+      while ((currentY < targetEndY || (currentY === targetEndY && currentM <= targetEndM)) && loopLimit < 120) {
+        loopLimit++;
+        const monthName = `${MONTH_NAMES[currentM]} ${currentY}`;
+        const totalDaysInM = new Date(currentY, currentM + 1, 0).getDate();
+        
+        let daysInM = totalDaysInM;
+        if (loopLimit === 1 && sDay > 1 && sDay <= totalDaysInM) {
+          daysInM = totalDaysInM - sDay + 1;
+        }
+
+        const defaultDue = getBasicSalaryForMonth(
+          teacherCategory,
+          sM,
+          sY,
+          initialDueIndex,
+          incrementMonth,
+          monthName
+        );
+        const defaultDrawn = getBasicSalaryForMonth(
+          teacherCategory,
+          sM,
+          sY,
+          isDrawnBasicSame ? initialDueIndex : initialDrawnIndex,
+          incrementMonth,
+          monthName
+        );
+
+        generatedRows.push(createNewRow(monthName, daysInM, defaultDue, defaultDrawn, dueDaPercent, drawnDaPercent, dueHraPercent, drawnHraPercent, medicalAllowance, gisAllowance, isNpsApplicable, useAutoDa));
+
+        if (currentM === 11) {
+          currentM = 0;
+          currentY++;
+        } else {
+          currentM++;
+        }
+      }
+
+      if (generatedRows.length > 0) {
+        setRows(generatedRows);
+        setExpandedRowId(generatedRows[0].id);
+      }
+    }
   };
 
   const updateRowField = (
@@ -2067,7 +2220,7 @@ export default function SalaryArrearPortal() {
                     फिटमेंट मैट्रिक्स वेतनमान सक्रिय (Fitment Matrix Salary Active)
                   </p>
                   <p className="text-slate-500 text-[10px] mt-1 leading-relaxed">
-                    यह विकल्प बिहार सरकार के <b>अनुलग्नक-क (Anulagnak-K)</b> फिटमेंट तालिका के अनुसार वार्षिक 3% वेतन वृद्धि (Increment) को जनवरी अथवा जुलाई महीने में स्वतः गणना कर लेता है।
+                    यह विकल्प आपकी योगदान तिथि <b>({teacherInfo.dateOfJoining || '15-11-2023'})</b> के महीने <b>({MONTH_NAMES[startMonth]} {startYear})</b> से शुरू करके बिहार सरकार के <b>अनुलग्नक-क (Anulagnak-K)</b> फिटमेंट तालिका के अनुसार प्रथम देय मूल वेतन एवं 3% वार्षिक वेतन वृद्धि (Increment) को स्वतः भर देता है।
                   </p>
                 </div>
 
@@ -2296,15 +2449,44 @@ export default function SalaryArrearPortal() {
                 />
               </div>
 
-              <div className="flex flex-col gap-1">
-                <label className="text-xs font-medium text-slate-700">योगदान तिथि (Date of Joining)</label>
+              <div className="flex flex-col gap-1 col-span-1 sm:col-span-2">
+                <label className="text-xs font-semibold text-slate-700 flex items-center justify-between">
+                  <span>योगदान तिथि (Date of Joining)</span>
+                  <span className="text-[10px] text-emerald-600 font-normal">पे मैट्रिक्स स्वचालित लिंक</span>
+                </label>
                 <input
                   type="text"
                   value={teacherInfo.dateOfJoining}
-                  onChange={e => setTeacherInfo({ ...teacherInfo, dateOfJoining: e.target.value })}
-                  placeholder="DD-MM-YYYY"
-                  className="w-full px-3 py-2 text-xs border border-slate-300 rounded focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+                  onChange={e => handleDateOfJoiningUpdate(e.target.value)}
+                  placeholder="DD-MM-YYYY (उदा. 15-11-2023)"
+                  className="w-full px-3 py-2 text-xs border border-slate-300 rounded focus:ring-2 focus:ring-indigo-500 outline-none transition-all font-mono"
                 />
+
+                {parseDateOfJoining(teacherInfo.dateOfJoining) ? (
+                  <div className="mt-1 p-2.5 bg-emerald-50 border border-emerald-200/80 rounded-md text-[11px] text-emerald-900 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <div>
+                      <span className="font-bold flex items-center gap-1 text-emerald-800">
+                        <Sparkles className="w-3.5 h-3.5 text-emerald-600" />
+                        योगदान तिथि: {MONTH_NAMES[parseDateOfJoining(teacherInfo.dateOfJoining)!.monthIdx]} {parseDateOfJoining(teacherInfo.dateOfJoining)!.year} (दिन {parseDateOfJoining(teacherInfo.dateOfJoining)!.day})
+                      </span>
+                      <p className="text-[10px] text-emerald-700 mt-0.5">
+                        पे मैट्रिक्स देय मूल वेतन (Level {initialDueIndex}): <b className="font-mono text-emerald-950">₹{(FITMENT_MATRIX[teacherCategory]?.[initialDueIndex - 1] || 25000).toLocaleString()}</b>
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={autoFillFromJoiningDate}
+                      className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-[10px] rounded transition-colors shadow-xs shrink-0 cursor-pointer flex items-center gap-1.5"
+                    >
+                      <RefreshCw className="w-3 h-3" />
+                      योगदान तिथि से देय वेतन ऑटो-भरें
+                    </button>
+                  </div>
+                ) : (
+                  <p className="text-[10px] text-slate-400 mt-0.5">
+                    प्रारूप: <b>15-11-2023</b> या <b>01-03-2024</b> — दर्ज करते ही पे मैट्रिक्स से पहला देय मूल वेतन स्वतः लागू हो जाएगा।
+                  </p>
+                )}
               </div>
 
               <div className="flex flex-col gap-1">
@@ -2581,6 +2763,19 @@ export default function SalaryArrearPortal() {
               </span>
               <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-widest">४. रेंज मंथ जनरेटर (Bulk Month Generator)</h2>
             </div>
+
+            <p className="text-[11px] text-indigo-700 bg-indigo-50 p-2.5 rounded-md border border-indigo-100 mb-4 flex items-center justify-between">
+              <span>
+                💡 <b>योगदान तिथि ({teacherInfo.dateOfJoining || '15-11-2023'}):</b> प्रारंभ महीना <b>{MONTH_NAMES[startMonth]} {startYear}</b> | पहला मूल वेतन: <b>₹{startDueBasic.toLocaleString()}</b>
+              </span>
+              <button
+                type="button"
+                onClick={autoFillFromJoiningDate}
+                className="px-2 py-1 text-[10px] font-semibold bg-indigo-600 hover:bg-indigo-700 text-white rounded transition cursor-pointer shrink-0"
+              >
+                योगदान तिथि से रिसेट करें
+              </button>
+            </p>
 
             <div className="grid grid-cols-2 gap-4">
               <div className="flex flex-col gap-1">
